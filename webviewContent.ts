@@ -262,16 +262,18 @@ td {
     font-size: 12px;
 }
 
+.col-checkbox { width: 30px; text-align: center; }
 .col-status { width: 36px; text-align: center; }
 .col-file   { width: auto; }
 .col-badge  { width: 120px; }
 .col-enc    { width: 120px; font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; }
 
-th:nth-child(1) { width: 36px; }
-th:nth-child(2) { width: auto; }
-th:nth-child(3) { width: 120px; }
+th:nth-child(1) { width: 30px; }
+th:nth-child(2) { width: 36px; }
+th:nth-child(3) { width: auto; }
 th:nth-child(4) { width: 120px; }
 th:nth-child(5) { width: 120px; }
+th:nth-child(6) { width: 120px; }
 
 .grid-row {
     transition: background 0.1s ease;
@@ -439,11 +441,21 @@ th:nth-child(5) { width: 120px; }
             <span class="filter-count" id="count-identical">0</span>
         </button>
         <span class="filter-total"><span id="visibleCount">0</span> / <span id="totalCount">0</span> items</span>
+        <div style="flex-grow: 1;"></div>
+        <button id="btnCopyRight" class="filter-btn" title="Copy from Left to Right">
+            <span class="codicon codicon-arrow-right"></span>
+            <span class="filter-text">Copy Right</span>
+        </button>
+        <button id="btnCopyLeft" class="filter-btn" title="Copy from Right to Left">
+            <span class="codicon codicon-arrow-left"></span>
+            <span class="filter-text">Copy Left</span>
+        </button>
     </div>
     <div class="table-wrapper" id="tableWrapper">
         <table>
             <thead>
                 <tr>
+                    <th style="width:30px;text-align:center;"><input type="checkbox" id="selectAllCheckbox" title="Select All"></th>
                     <th style="width:36px;text-align:center;" title="Status"><span class="codicon codicon-symbol-event"></span></th>
                     <th>File</th>
                     <th>Status</th>
@@ -634,7 +646,8 @@ th:nth-child(5) { width: 120px; }
         if (!isRoot) {
             var goUpTr = document.createElement('tr');
             goUpTr.className = 'go-up-row';
-            goUpTr.innerHTML = '<td class="col-status"><span class="codicon codicon-arrow-up"></span></td>'
+            goUpTr.innerHTML = '<td class="col-checkbox"></td>'
+                + '<td class="col-status"><span class="codicon codicon-arrow-up"></span></td>'
                 + '<td class="col-file" colspan="4">'
                 + '<span class="codicon codicon-folder file-icon"></span>'
                 + '<span class="file-name">⬆ ..</span>'
@@ -670,7 +683,9 @@ th:nth-child(5) { width: 120px; }
         var icon = row.isDirectory ? 'codicon-folder' : getFileIcon(row.extension);
         var statusIcon = statusIcons[row.status] || 'codicon-file';
 
-        tr.innerHTML = '<td class="col-status"><span class="codicon ' + statusIcon + '" title="' + esc(row.status) + '"></span></td>'
+        var disableCheckbox = row.isDirectory || row.status === 'Identical' ? 'disabled' : '';
+        tr.innerHTML = '<td class="col-checkbox"><input type="checkbox" class="row-checkbox" ' + disableCheckbox + ' /></td>'
+            + '<td class="col-status"><span class="codicon ' + statusIcon + '" title="' + esc(row.status) + '"></span></td>'
             + '<td class="col-file"><span class="codicon ' + icon + ' file-icon"></span><span class="file-name" title="' + esc(row.relativePath) + '">' + esc(row.fileName) + '</span></td>'
             + '<td class="col-badge"><span class="status-badge ' + statusClass + '">' + esc(row.status) + '</span></td>'
             + '<td class="col-enc">' + esc(row.encodingLeft) + '</td>'
@@ -720,6 +735,9 @@ th:nth-child(5) { width: 120px; }
     }
 
     tbody.addEventListener('click', function(event) {
+        if (event.target.tagName === 'INPUT' && event.target.type === 'checkbox') {
+            return;
+        }
         var row = event.target.closest('tr.grid-row');
         if (!row) {
             var goUp = event.target.closest('tr.go-up-row');
@@ -747,7 +765,30 @@ th:nth-child(5) { width: 120px; }
         return s;
     }
 
+    var searchBuffer = '';
+    var searchTimeout = null;
+
     document.addEventListener('keydown', function(e) {
+        if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+            searchBuffer += e.key.toLowerCase();
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(function() { searchBuffer = ''; }, 800);
+
+            var rows = tbody.querySelectorAll('tr.grid-row:not(.hidden-by-filter)');
+            for (var i = 0; i < rows.length; i++) {
+                var fileName = rows[i].getAttribute('data-name') || '';
+                if (fileName.toLowerCase().startsWith(searchBuffer)) {
+                    if (selectedRow) { selectedRow.classList.remove('selected'); }
+                    rows[i].classList.add('selected');
+                    selectedRow = rows[i];
+                    selectedRow.scrollIntoView({ block: 'center' });
+                    e.preventDefault();
+                    break;
+                }
+            }
+            return;
+        }
+
         if (!selectedRow) { return; }
         var target = null;
         if (e.key === 'ArrowDown') {
@@ -760,13 +801,51 @@ th:nth-child(5) { width: 120px; }
             handleRowClick(selectedRow);
             e.preventDefault();
             return;
+        } else if (e.key === ' ') {
+            var cb = selectedRow.querySelector('.row-checkbox');
+            if (cb && !cb.disabled) {
+                cb.checked = !cb.checked;
+                e.preventDefault();
+            }
+            return;
         }
+
         if (target && target.tagName === 'TR') {
             selectedRow.classList.remove('selected');
             target.classList.add('selected');
             selectedRow = target;
             target.scrollIntoView({ block: 'nearest' });
         }
+    });
+
+    document.getElementById('selectAllCheckbox').addEventListener('change', function(e) {
+        var checked = e.target.checked;
+        var checkboxes = tbody.querySelectorAll('.row-checkbox:not(:disabled)');
+        for (var i = 0; i < checkboxes.length; i++) {
+            checkboxes[i].checked = checked;
+        }
+    });
+
+    function getSelectedFiles() {
+        var files = [];
+        var checkboxes = tbody.querySelectorAll('.row-checkbox:checked');
+        for (var i = 0; i < checkboxes.length; i++) {
+            var tr = checkboxes[i].closest('tr');
+            if (tr) {
+                files.push({ base: tr.getAttribute('data-base'), target: tr.getAttribute('data-target') });
+            }
+        }
+        return files;
+    }
+
+    document.getElementById('btnCopyLeft').addEventListener('click', function() {
+        var files = getSelectedFiles();
+        if (files.length > 0) vscode.postMessage({ command: 'copyFiles', direction: 'toLeft', files: files });
+    });
+
+    document.getElementById('btnCopyRight').addEventListener('click', function() {
+        var files = getSelectedFiles();
+        if (files.length > 0) vscode.postMessage({ command: 'copyFiles', direction: 'toRight', files: files });
     });
 
     window.addEventListener('message', function(event) {
@@ -791,6 +870,33 @@ th:nth-child(5) { width: 120px; }
             updateCounts();
             rebuildFiltered();
             tableWrapper.scrollTop = 0;
+        } else if (msg.command === 'filesCopied') {
+            var paths = msg.files || [];
+            var rows = tbody.querySelectorAll('tr.grid-row');
+            for (var i = 0; i < rows.length; i++) {
+                if (paths.indexOf(rows[i].getAttribute('data-base')) !== -1) {
+                    rows[i].classList.remove('status-different', 'status-encoding', 'status-left-only', 'status-right-only');
+                    rows[i].classList.add('status-identical');
+                    rows[i].setAttribute('data-status', 'identical');
+                    rows[i].setAttribute('data-clickable', 'false');
+                    var iconSpan = rows[i].querySelector('.col-status .codicon');
+                    if (iconSpan) {
+                        iconSpan.className = 'codicon ' + statusIcons['Identical'];
+                        iconSpan.title = 'Identical';
+                    }
+                    var badge = rows[i].querySelector('.status-badge');
+                    if (badge) {
+                        badge.className = 'status-badge status-identical';
+                        badge.textContent = 'Identical';
+                    }
+                    var cb = rows[i].querySelector('.row-checkbox');
+                    if (cb) {
+                        cb.checked = false;
+                        cb.disabled = true;
+                    }
+                }
+            }
+            updateCounts();
         }
     });
 })();

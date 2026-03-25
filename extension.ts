@@ -15,7 +15,8 @@ interface WinMergeConfig {
 type IncomingMessage =
     | { command: 'openDiff'; base: string; target: string; fileName: string }
     | { command: 'navigateDir'; subDir: string }
-    | { command: 'goUp' };
+    | { command: 'goUp' }
+    | { command: 'copyFiles'; direction: 'toLeft' | 'toRight'; files: { base: string, target: string }[] };
 
 function loadConfig(extensionPath: string): WinMergeConfig {
     const configPath = path.join(extensionPath, 'winmerge.config.json');
@@ -163,8 +164,8 @@ async function compareCurrentLevel(
                     relativePath: subDir ? `${subDir}/${name}` : name,
                     extension: '',
                     status: dirStatus,
-                    basePath: inBase ? path.join(basePath, subDir, name) : '',
-                    targetPath: inTarget ? path.join(targetPath, subDir, name) : '',
+                    basePath: path.join(basePath, subDir, name),
+                    targetPath: path.join(targetPath, subDir, name),
                     encodingLeft: '',
                     encodingRight: '',
                     isDirectory: true,
@@ -222,8 +223,8 @@ async function compareCurrentLevel(
                 relativePath: subDir ? `${subDir}/${name}` : name,
                 extension,
                 status,
-                basePath: inBase ? baseFilePath : '',
-                targetPath: inTarget ? targetFilePath : '',
+                basePath: baseFilePath,
+                targetPath: targetFilePath,
                 encodingLeft,
                 encodingRight,
                 isDirectory: false,
@@ -327,7 +328,6 @@ export async function runComparison(
     const codiconsWebviewUri = panel.webview.asWebviewUri(codiconsUri);
     panel.webview.html = getWebviewContent(basePath, targetPath, codiconsWebviewUri.toString(), gridDefaults);
 
-    // Cache rows per subDir to avoid rescanning previously visited directories
     const dirCache = new Map<string, WebviewRow[]>();
 
     async function runCompareAndSend(subDir: string): Promise<void> {
@@ -387,6 +387,26 @@ export async function runComparison(
                 parts.pop();
                 currentSubDir = parts.join('/');
                 await runCompareAndSend(currentSubDir);
+            } else if (message.command === 'copyFiles') {
+                const filesToUpdate: string[] = [];
+                for (const filePair of message.files) {
+                    try {
+                        const src = message.direction === 'toLeft' ? filePair.target : filePair.base;
+                        const dest = message.direction === 'toLeft' ? filePair.base : filePair.target;
+                        if (await fs.pathExists(src)) {
+                            await fs.copy(src, dest, { overwrite: true });
+                        } else {
+                            if (await fs.pathExists(dest)) {
+                                await fs.remove(dest);
+                            }
+                        }
+                        filesToUpdate.push(filePair.base);
+                    } catch (err) {
+                        vscode.window.showErrorMessage(`Failed to copy: ${err}`);
+                    }
+                }
+                dirCache.delete(currentSubDir);
+                panel.webview.postMessage({ command: 'filesCopied', files: filesToUpdate });
             }
         },
         undefined,
@@ -429,7 +449,35 @@ export function activate(context: vscode.ExtensionContext): void {
         await runComparison(baseFolderUri[0].fsPath, targetFolderUri[0].fsPath, context);
     });
 
-    context.subscriptions.push(disposable);
+    const copyDiffToLeft = vscode.commands.registerCommand('winmerge-vscode.copyDiffToLeft', async () => {
+        const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+        if (tab && tab.input instanceof vscode.TabInputTextDiff) {
+            try {
+                const originalUri = tab.input.original;
+                const modifiedUri = tab.input.modified;
+                const content = await vscode.workspace.fs.readFile(modifiedUri);
+                await vscode.workspace.fs.writeFile(originalUri, content);
+            } catch (err) {
+                vscode.window.showErrorMessage(`Error copying to left: ${err}`);
+            }
+        }
+    });
+
+    const copyDiffToRight = vscode.commands.registerCommand('winmerge-vscode.copyDiffToRight', async () => {
+        const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+        if (tab && tab.input instanceof vscode.TabInputTextDiff) {
+            try {
+                const originalUri = tab.input.original;
+                const modifiedUri = tab.input.modified;
+                const content = await vscode.workspace.fs.readFile(originalUri);
+                await vscode.workspace.fs.writeFile(modifiedUri, content);
+            } catch (err) {
+                vscode.window.showErrorMessage(`Error copying to right: ${err}`);
+            }
+        }
+    });
+
+    context.subscriptions.push(disposable, copyDiffToLeft, copyDiffToRight);
 }
 
 export function deactivate(): void {}

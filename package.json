@@ -16,6 +16,26 @@
       {
         "command": "winmerge-vscode.compareFolders",
         "title": "WinMerge: Compare Folders"
+      },
+      {
+        "command": "winmerge-vscode.copyDiffToLeft",
+        "title": "WinMerge: Copy Diff to Left"
+      },
+      {
+        "command": "winmerge-vscode.copyDiffToRight",
+        "title": "WinMerge: Copy Diff to Right"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "winmerge-vscode.copyDiffToLeft",
+        "key": "ctrl+alt+left",
+        "when": "isInDiffEditor && textInputFocus"
+      },
+      {
+        "command": "winmerge-vscode.copyDiffToRight",
+        "key": "ctrl+alt+right",
+        "when": "isInDiffEditor && textInputFocus"
       }
     ],
     "viewContainers": {
@@ -32,7 +52,8 @@
         {
           "type": "webview",
           "id": "winmerge-vscode-sidebar",
-          "name": "WinMerge Compare"
+          "name": "WinMerge Compare",
+          "icon": "resources/icon-sidebar.svg"
         }
       ]
     },
