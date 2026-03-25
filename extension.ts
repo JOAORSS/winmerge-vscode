@@ -139,7 +139,7 @@ async function compareCurrentLevel(
     const totalItems = allNames.length;
     let processed = 0;
 
-    const CHUNK_SIZE = 200;
+    const CHUNK_SIZE = 1200;
     for (let i = 0; i < totalItems; i += CHUNK_SIZE) {
         const chunk = allNames.slice(i, i + CHUNK_SIZE);
         
