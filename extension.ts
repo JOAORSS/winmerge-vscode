@@ -4,6 +4,7 @@ import * as fs from 'fs-extra';
 import { parseFilterFile, shouldIncludeFile, shouldIncludeDir, FilterConfig } from './filterParser';
 import { detectEncoding, compareFileContents, isOnlyEncodingDifference } from './encodingDetector';
 import { getWebviewContent, WebviewRow, WebviewRowStatus, GridDefaults } from './webviewContent';
+import { SidebarProvider } from './sidebarProvider';
 
 interface WinMergeConfig {
     defaultFilters?: string[];
@@ -236,10 +237,134 @@ async function compareCurrentLevel(
     return rows;
 }
 
-export function activate(context: vscode.ExtensionContext): void {
-    const disposable = vscode.commands.registerCommand('winmerge-vscode.compareFolders', async () => {
-        const config = loadConfig(context.extensionPath);
+export async function runComparison(
+    basePath: string,
+    targetPath: string,
+    context: vscode.ExtensionContext
+): Promise<void> {
+    const config = loadConfig(context.extensionPath);
+    let filter: FilterConfig | undefined = loadDefaultFilters(config);
 
+    if (filter) {
+        vscode.window.showInformationMessage(`Default filter loaded: ${filter.name || 'config filters'}`);
+    } else {
+        const filterAnswer = await vscode.window.showQuickPick(['No filter', 'Select .flt filter file'], {
+            placeHolder: 'Do you want to apply a WinMerge filter file?'
+        });
+
+        if (filterAnswer === 'Select .flt filter file') {
+            const filterFileUri = await vscode.window.showOpenDialog({
+                canSelectFiles: true,
+                canSelectFolders: false,
+                canSelectMany: false,
+                openLabel: 'Select Filter File (.flt)',
+                filters: {
+                    'WinMerge Filter': ['flt'],
+                    'All Files': ['*']
+                }
+            });
+
+            if (filterFileUri && filterFileUri.length > 0) {
+                try {
+                    filter = parseFilterFile(filterFileUri[0].fsPath);
+                    vscode.window.showInformationMessage(`Filter loaded: ${filter.name || 'Unnamed'}`);
+                } catch (err) {
+                    vscode.window.showWarningMessage(`Failed to parse filter file: ${err}`);
+                }
+            }
+        }
+    }
+
+    let currentSubDir = '';
+
+    const codiconsUri = vscode.Uri.joinPath(
+        context.extensionUri,
+        'node_modules',
+        '@vscode',
+        'codicons',
+        'dist',
+        'codicon.css'
+    );
+
+    const panel = vscode.window.createWebviewPanel(
+        'winmergeCompare',
+        'WinMerge: Folder Comparison',
+        vscode.ViewColumn.One,
+        {
+            enableScripts: true,
+            retainContextWhenHidden: true
+        }
+    );
+
+    const gridDefaults: GridDefaults = {
+        showIdentical: config.gridDefaults?.showIdentical ?? true,
+        showDifferent: config.gridDefaults?.showDifferent ?? true,
+        showEncodingOnly: config.gridDefaults?.showEncodingOnly ?? true,
+        showLeftOnly: config.gridDefaults?.showLeftOnly ?? true,
+        showRightOnly: config.gridDefaults?.showRightOnly ?? true,
+    };
+
+    const codiconsWebviewUri = panel.webview.asWebviewUri(codiconsUri);
+    panel.webview.html = getWebviewContent(basePath, targetPath, codiconsWebviewUri.toString(), gridDefaults);
+
+    async function runCompareAndSend(subDir: string): Promise<void> {
+        await vscode.window.withProgress(
+            {
+                location: vscode.ProgressLocation.Notification,
+                title: 'WinMerge: Comparing...',
+                cancellable: false
+            },
+            async (progress) => {
+                const rows = await compareCurrentLevel(basePath, targetPath, subDir, filter, config.encodingOverrides, progress);
+                const isRoot = subDir === '';
+                const currentBase = subDir ? path.join(basePath, subDir) : basePath;
+                const currentTarget = subDir ? path.join(targetPath, subDir) : targetPath;
+                panel.webview.postMessage({
+                    command: 'setData',
+                    rows,
+                    isRoot,
+                    currentSubDir: subDir,
+                    basePath: currentBase,
+                    targetPath: currentTarget,
+                });
+            }
+        );
+    }
+
+    await runCompareAndSend('');
+
+    panel.webview.onDidReceiveMessage(
+        async (message: IncomingMessage) => {
+            if (message.command === 'openDiff') {
+                const baseUri = vscode.Uri.file(message.base);
+                const targetUri = vscode.Uri.file(message.target);
+                const title = `${message.fileName} (Base ↔ Target)`;
+                await vscode.commands.executeCommand('vscode.diff', baseUri, targetUri, title);
+            } else if (message.command === 'navigateDir') {
+                currentSubDir = message.subDir;
+                await runCompareAndSend(currentSubDir);
+            } else if (message.command === 'goUp') {
+                const parts = currentSubDir.split('/');
+                parts.pop();
+                currentSubDir = parts.join('/');
+                await runCompareAndSend(currentSubDir);
+            }
+        },
+        undefined,
+        context.subscriptions
+    );
+}
+
+export function activate(context: vscode.ExtensionContext): void {
+    const sidebarProvider = new SidebarProvider((basePath, targetPath) => {
+        runComparison(basePath, targetPath, context);
+    });
+
+    context.subscriptions.push(
+        vscode.window.registerWebviewViewProvider(SidebarProvider.viewType, sidebarProvider)
+    );
+
+    const disposable = vscode.commands.registerCommand('winmerge-vscode.compareFolders', async () => {
         const baseFolderUri = await vscode.window.showOpenDialog({
             canSelectFiles: false,
             canSelectFolders: true,
@@ -262,118 +387,7 @@ export function activate(context: vscode.ExtensionContext): void {
             return;
         }
 
-        let filter: FilterConfig | undefined = loadDefaultFilters(config);
-
-        if (filter) {
-            vscode.window.showInformationMessage(`Default filter loaded: ${filter.name || 'config filters'}`);
-        } else {
-            const filterAnswer = await vscode.window.showQuickPick(['No filter', 'Select .flt filter file'], {
-                placeHolder: 'Do you want to apply a WinMerge filter file?'
-            });
-
-            if (filterAnswer === 'Select .flt filter file') {
-                const filterFileUri = await vscode.window.showOpenDialog({
-                    canSelectFiles: true,
-                    canSelectFolders: false,
-                    canSelectMany: false,
-                    openLabel: 'Select Filter File (.flt)',
-                    filters: {
-                        'WinMerge Filter': ['flt'],
-                        'All Files': ['*']
-                    }
-                });
-
-                if (filterFileUri && filterFileUri.length > 0) {
-                    try {
-                        filter = parseFilterFile(filterFileUri[0].fsPath);
-                        vscode.window.showInformationMessage(`Filter loaded: ${filter.name || 'Unnamed'}`);
-                    } catch (err) {
-                        vscode.window.showWarningMessage(`Failed to parse filter file: ${err}`);
-                    }
-                }
-            }
-        }
-
-        const basePath = baseFolderUri[0].fsPath;
-        const targetPath = targetFolderUri[0].fsPath;
-        let currentSubDir = '';
-
-        const codiconsUri = vscode.Uri.joinPath(
-            context.extensionUri,
-            'node_modules',
-            '@vscode',
-            'codicons',
-            'dist',
-            'codicon.css'
-        );
-
-        const panel = vscode.window.createWebviewPanel(
-            'winmergeCompare',
-            'WinMerge: Folder Comparison',
-            vscode.ViewColumn.One,
-            {
-                enableScripts: true,
-                retainContextWhenHidden: true
-            }
-        );
-
-        const gridDefaults: GridDefaults = {
-            showIdentical: config.gridDefaults?.showIdentical ?? true,
-            showDifferent: config.gridDefaults?.showDifferent ?? true,
-            showEncodingOnly: config.gridDefaults?.showEncodingOnly ?? true,
-            showLeftOnly: config.gridDefaults?.showLeftOnly ?? true,
-            showRightOnly: config.gridDefaults?.showRightOnly ?? true,
-        };
-
-        const codiconsWebviewUri = panel.webview.asWebviewUri(codiconsUri);
-        panel.webview.html = getWebviewContent(basePath, targetPath, codiconsWebviewUri.toString(), gridDefaults);
-
-        async function runCompareAndSend(subDir: string): Promise<void> {
-            await vscode.window.withProgress(
-                {
-                    location: vscode.ProgressLocation.Notification,
-                    title: 'WinMerge: Comparing...',
-                    cancellable: false
-                },
-                async (progress) => {
-                    const rows = await compareCurrentLevel(basePath, targetPath, subDir, filter, config.encodingOverrides, progress);
-                    const isRoot = subDir === '';
-                    const currentBase = subDir ? path.join(basePath, subDir) : basePath;
-                    const currentTarget = subDir ? path.join(targetPath, subDir) : targetPath;
-                    panel.webview.postMessage({
-                        command: 'setData',
-                        rows,
-                        isRoot,
-                        currentSubDir: subDir,
-                        basePath: currentBase,
-                        targetPath: currentTarget,
-                    });
-                }
-            );
-        }
-
-        await runCompareAndSend('');
-
-        panel.webview.onDidReceiveMessage(
-            async (message: IncomingMessage) => {
-                if (message.command === 'openDiff') {
-                    const baseUri = vscode.Uri.file(message.base);
-                    const targetUri = vscode.Uri.file(message.target);
-                    const title = `${message.fileName} (Base ↔ Target)`;
-                    await vscode.commands.executeCommand('vscode.diff', baseUri, targetUri, title);
-                } else if (message.command === 'navigateDir') {
-                    currentSubDir = message.subDir;
-                    await runCompareAndSend(currentSubDir);
-                } else if (message.command === 'goUp') {
-                    const parts = currentSubDir.split('/');
-                    parts.pop();
-                    currentSubDir = parts.join('/');
-                    await runCompareAndSend(currentSubDir);
-                }
-            },
-            undefined,
-            context.subscriptions
-        );
+        await runComparison(baseFolderUri[0].fsPath, targetFolderUri[0].fsPath, context);
     });
 
     context.subscriptions.push(disposable);

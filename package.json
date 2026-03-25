@@ -18,6 +18,24 @@
         "title": "WinMerge: Compare Folders"
       }
     ],
+    "viewContainers": {
+      "activitybar": [
+        {
+          "id": "winmerge-sidebar-container",
+          "title": "WinMerge Compare",
+          "icon": "resources/icon-sidebar.svg"
+        }
+      ]
+    },
+    "views": {
+      "winmerge-sidebar-container": [
+        {
+          "type": "webview",
+          "id": "winmerge-vscode-sidebar",
+          "name": "WinMerge Compare"
+        }
+      ]
+    },
     "configurationDefaults": {
       "files.associations": {
         "*.pas.tmp": "objectpascal",
