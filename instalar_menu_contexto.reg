@@ -1,0 +1,28 @@
+Windows Registry Editor Version 5.00
+
+; ============================================================
+; Adds "Compare with WinMerge VS Code" to the right-click
+; context menu when clicking on a FOLDER in Windows Explorer.
+;
+; Usage: Double-click this file to import into the registry.
+; To remove: Delete the keys below via regedit or create an
+; uninstall .reg file.
+; ============================================================
+
+; --- Classic context menu (Windows 10 / Windows 11 "Show more options") ---
+
+[HKEY_CLASSES_ROOT\Directory\shell\WinMergeVSCode]
+@="Compare with WinMerge VS Code"
+"Icon"="code.cmd,0"
+
+[HKEY_CLASSES_ROOT\Directory\shell\WinMergeVSCode\command]
+@="cmd /c code --command winmerge-vscode.compareFolders"
+
+; --- Background context menu (right-click on empty area inside a folder) ---
+
+[HKEY_CLASSES_ROOT\Directory\Background\shell\WinMergeVSCode]
+@="Compare with WinMerge VS Code"
+"Icon"="code.cmd,0"
+
+[HKEY_CLASSES_ROOT\Directory\Background\shell\WinMergeVSCode\command]
+@="cmd /c code --command winmerge-vscode.compareFolders"

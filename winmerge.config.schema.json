@@ -1,0 +1,59 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "WinMerge VS Code Configuration",
+    "description": "Configuration file for the WinMerge VS Code extension",
+    "type": "object",
+    "properties": {
+        "$schema": {
+            "type": "string",
+            "description": "Path to the JSON schema file for validation"
+        },
+        "defaultFilters": {
+            "type": "array",
+            "description": "List of absolute paths to WinMerge .flt filter files to apply by default",
+            "items": {
+                "type": "string"
+            }
+        },
+        "encodingOverrides": {
+            "type": "object",
+            "description": "Map of file extensions to encoding names (e.g. \".pas\": \"windows-1252\")",
+            "additionalProperties": {
+                "type": "string"
+            }
+        },
+        "gridDefaults": {
+            "type": "object",
+            "description": "Default visibility settings for comparison result statuses in the grid",
+            "properties": {
+                "showIdentical": {
+                    "type": "boolean",
+                    "description": "Show files that are identical",
+                    "default": false
+                },
+                "showDifferent": {
+                    "type": "boolean",
+                    "description": "Show files that differ",
+                    "default": true
+                },
+                "showEncodingOnly": {
+                    "type": "boolean",
+                    "description": "Show files that differ only in encoding",
+                    "default": true
+                },
+                "showLeftOnly": {
+                    "type": "boolean",
+                    "description": "Show files that exist only on the left side",
+                    "default": true
+                },
+                "showRightOnly": {
+                    "type": "boolean",
+                    "description": "Show files that exist only on the right side",
+                    "default": true
+                }
+            },
+            "additionalProperties": false
+        }
+    },
+    "additionalProperties": false
+}

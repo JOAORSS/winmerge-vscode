@@ -1,0 +1,17 @@
+{
+    "$schema": "./winmerge.config.schema.json",
+    "defaultFilters": [
+        "C:\\Users\\JoaoRaenke\\Documents\\VsCode\\winmerge\\Filters\\Delphi.flt"
+    ],
+    "encodingOverrides": {
+        ".pas": "windows-1252",
+        ".dfm": "windows-1252"
+    },
+    "gridDefaults": {
+        "showIdentical": false,
+        "showDifferent": true,
+        "showEncodingOnly": true,
+        "showLeftOnly": true,
+        "showRightOnly": true
+    }
+}
