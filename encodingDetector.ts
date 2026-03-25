@@ -1,10 +1,7 @@
-import * as fs from 'fs';
 import * as jschardet from 'jschardet';
 
-/** Maximum bytes to read for encoding detection */
 const SAMPLE_SIZE = 8192;
 
-/** Map of common encoding names to more readable labels */
 const ENCODING_LABELS: Record<string, string> = {
     'ascii': 'ASCII',
     'utf-8': 'UTF-8',
@@ -30,25 +27,15 @@ const ENCODING_LABELS: Record<string, string> = {
     'macintosh': 'MacRoman',
 };
 
-/**
- * Detect the text encoding of a file.
- * @param filePath Absolute path to the file
- * @returns A human-readable encoding label, or 'Binary' if detection fails
- */
-export async function detectEncoding(filePath: string): Promise<string> {
+export async function detectEncoding(buffer?: Buffer): Promise<string> {
+    if (!buffer || buffer.length === 0) {
+        return 'Empty';
+    }
+
     try {
-        const fd = fs.openSync(filePath, 'r');
-        const buffer = Buffer.alloc(SAMPLE_SIZE);
-        const bytesRead = fs.readSync(fd, buffer, 0, SAMPLE_SIZE, 0);
-        fs.closeSync(fd);
-
-        if (bytesRead === 0) {
-            return 'Empty';
-        }
-
+        const bytesRead = Math.min(buffer.length, SAMPLE_SIZE);
         const sample = buffer.subarray(0, bytesRead);
 
-        // Check for BOM markers
         if (bytesRead >= 3 && sample[0] === 0xEF && sample[1] === 0xBB && sample[2] === 0xBF) {
             return 'UTF-8 (BOM)';
         }
@@ -72,31 +59,12 @@ export async function detectEncoding(filePath: string): Promise<string> {
     }
 }
 
-/**
- * Compare file contents byte-by-byte.
- * @returns 'identical' | 'different'
- */
-export async function compareFileContents(pathA: string, pathB: string): Promise<'identical' | 'different'> {
-    try {
-        const bufA = fs.readFileSync(pathA);
-        const bufB = fs.readFileSync(pathB);
-        return bufA.equals(bufB) ? 'identical' : 'different';
-    } catch {
-        return 'different';
-    }
+export async function compareFileContents(bufA: Buffer, bufB: Buffer): Promise<'identical' | 'different'> {
+    return bufA.equals(bufB) ? 'identical' : 'different';
 }
 
-/**
- * Normalize line endings and compare text content only (stripping encoding differences).
- * This reads both files as UTF-8 and compares text after normalizing newlines.
- * @returns true if text content is the same (only encoding/BOM differs)
- */
-export async function isOnlyEncodingDifference(pathA: string, pathB: string): Promise<boolean> {
+export async function isOnlyEncodingDifference(bufA: Buffer, bufB: Buffer): Promise<boolean> {
     try {
-        const bufA = fs.readFileSync(pathA);
-        const bufB = fs.readFileSync(pathB);
-
-        // Strip BOM if present
         const stripBom = (buf: Buffer): Buffer => {
             if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) {
                 return buf.subarray(3);

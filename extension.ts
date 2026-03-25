@@ -76,17 +76,17 @@ interface LevelEntry {
     isDirectory: boolean;
 }
 
-function collectCurrentLevel(
+async function collectCurrentLevel(
     rootDir: string,
     subDir: string,
     filter: FilterConfig | undefined
-): LevelEntry[] {
+): Promise<LevelEntry[]> {
     const currentDir = path.join(rootDir, subDir);
     const results: LevelEntry[] = [];
 
     let entries: fs.Dirent[];
     try {
-        entries = fs.readdirSync(currentDir, { withFileTypes: true });
+        entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
     } catch {
         return results;
     }
@@ -119,8 +119,10 @@ async function compareCurrentLevel(
 ): Promise<WebviewRow[]> {
     progress.report({ message: 'Scanning current level...' });
 
-    const baseEntries = collectCurrentLevel(basePath, subDir, filter);
-    const targetEntries = collectCurrentLevel(targetPath, subDir, filter);
+    const [baseEntries, targetEntries] = await Promise.all([
+        collectCurrentLevel(basePath, subDir, filter),
+        collectCurrentLevel(targetPath, subDir, filter)
+    ]);
 
     const baseMap = new Map<string, LevelEntry>();
     for (const e of baseEntries) {
@@ -132,90 +134,108 @@ async function compareCurrentLevel(
         targetMap.set(e.name, e);
     }
 
-    const allNames = new Set([...baseMap.keys(), ...targetMap.keys()]);
+    const allNames = Array.from(new Set([...baseMap.keys(), ...targetMap.keys()]));
     const rows: WebviewRow[] = [];
-    const totalItems = allNames.size;
+    const totalItems = allNames.length;
     let processed = 0;
 
-    for (const name of allNames) {
-        processed++;
-        if (processed % 50 === 0 || processed === totalItems) {
-            progress.report({
-                message: `Comparing... (${processed}/${totalItems})`,
-                increment: (50 / totalItems) * 100
-            });
-        }
+    const CHUNK_SIZE = 200;
+    for (let i = 0; i < totalItems; i += CHUNK_SIZE) {
+        const chunk = allNames.slice(i, i + CHUNK_SIZE);
+        
+        const chunkRows = await Promise.all(chunk.map(async (name) => {
+            const inBase = baseMap.get(name);
+            const inTarget = targetMap.get(name);
 
-        const inBase = baseMap.get(name);
-        const inTarget = targetMap.get(name);
+            const isDir = (inBase?.isDirectory ?? false) || (inTarget?.isDirectory ?? false);
 
-        const isDir = (inBase?.isDirectory ?? false) || (inTarget?.isDirectory ?? false);
-
-        if (isDir) {
-            let dirStatus: WebviewRowStatus;
-            if (inBase && !inTarget) {
-                dirStatus = 'Left Only';
-            } else if (!inBase && inTarget) {
-                dirStatus = 'Right Only';
-            } else {
-                dirStatus = 'Directory';
+            if (isDir) {
+                let dirStatus: WebviewRowStatus;
+                if (inBase && !inTarget) {
+                    dirStatus = 'Left Only';
+                } else if (!inBase && inTarget) {
+                    dirStatus = 'Right Only';
+                } else {
+                    dirStatus = 'Directory';
+                }
+                return {
+                    fileName: name,
+                    relativePath: subDir ? `${subDir}/${name}` : name,
+                    extension: '',
+                    status: dirStatus,
+                    basePath: inBase ? path.join(basePath, subDir, name) : '',
+                    targetPath: inTarget ? path.join(targetPath, subDir, name) : '',
+                    encodingLeft: '',
+                    encodingRight: '',
+                    isDirectory: true,
+                } as WebviewRow;
             }
-            rows.push({
+
+            const extension = path.extname(name);
+            const baseFilePath = path.join(basePath, subDir, name);
+            const targetFilePath = path.join(targetPath, subDir, name);
+
+            let status: WebviewRowStatus;
+            let encodingLeft = '';
+            let encodingRight = '';
+
+            let bufA: Buffer | undefined;
+            if (inBase) {
+                try { bufA = await fs.promises.readFile(baseFilePath); } catch {}
+            }
+
+            let bufB: Buffer | undefined;
+            if (inTarget) {
+                try { bufB = await fs.promises.readFile(targetFilePath); } catch {}
+            }
+
+            if (inBase && !inTarget) {
+                status = 'Left Only';
+                const detected = await detectEncoding(bufA);
+                encodingLeft = applyEncodingOverride(detected, name, encodingOverrides);
+            } else if (!inBase && inTarget) {
+                status = 'Right Only';
+                const detected = await detectEncoding(bufB);
+                encodingRight = applyEncodingOverride(detected, name, encodingOverrides);
+            } else {
+                const detectedLeft = await detectEncoding(bufA);
+                const detectedRight = await detectEncoding(bufB);
+                encodingLeft = applyEncodingOverride(detectedLeft, name, encodingOverrides);
+                encodingRight = applyEncodingOverride(detectedRight, name, encodingOverrides);
+
+                if (!bufA || !bufB) {
+                    status = 'Different';
+                } else {
+                    const contentResult = await compareFileContents(bufA, bufB);
+
+                    if (contentResult === 'identical') {
+                        status = 'Identical';
+                    } else {
+                        const onlyEncoding = await isOnlyEncodingDifference(bufA, bufB);
+                        status = onlyEncoding ? 'Encoding Only' : 'Different';
+                    }
+                }
+            }
+
+            return {
                 fileName: name,
                 relativePath: subDir ? `${subDir}/${name}` : name,
-                extension: '',
-                status: dirStatus,
-                basePath: inBase ? path.join(basePath, subDir, name) : '',
-                targetPath: inTarget ? path.join(targetPath, subDir, name) : '',
-                encodingLeft: '',
-                encodingRight: '',
-                isDirectory: true,
-            });
-            continue;
-        }
+                extension,
+                status,
+                basePath: inBase ? baseFilePath : '',
+                targetPath: inTarget ? targetFilePath : '',
+                encodingLeft,
+                encodingRight,
+                isDirectory: false,
+            } as WebviewRow;
+        }));
 
-        const extension = path.extname(name);
-        const baseFilePath = path.join(basePath, subDir, name);
-        const targetFilePath = path.join(targetPath, subDir, name);
-
-        let status: WebviewRowStatus;
-        let encodingLeft = '';
-        let encodingRight = '';
-
-        if (inBase && !inTarget) {
-            status = 'Left Only';
-            const detected = await detectEncoding(baseFilePath);
-            encodingLeft = applyEncodingOverride(detected, name, encodingOverrides);
-        } else if (!inBase && inTarget) {
-            status = 'Right Only';
-            const detected = await detectEncoding(targetFilePath);
-            encodingRight = applyEncodingOverride(detected, name, encodingOverrides);
-        } else {
-            const detectedLeft = await detectEncoding(baseFilePath);
-            const detectedRight = await detectEncoding(targetFilePath);
-            encodingLeft = applyEncodingOverride(detectedLeft, name, encodingOverrides);
-            encodingRight = applyEncodingOverride(detectedRight, name, encodingOverrides);
-
-            const contentResult = await compareFileContents(baseFilePath, targetFilePath);
-
-            if (contentResult === 'identical') {
-                status = 'Identical';
-            } else {
-                const onlyEncoding = await isOnlyEncodingDifference(baseFilePath, targetFilePath);
-                status = onlyEncoding ? 'Encoding Only' : 'Different';
-            }
-        }
-
-        rows.push({
-            fileName: name,
-            relativePath: subDir ? `${subDir}/${name}` : name,
-            extension,
-            status,
-            basePath: inBase ? baseFilePath : '',
-            targetPath: inTarget ? targetFilePath : '',
-            encodingLeft,
-            encodingRight,
-            isDirectory: false,
+        rows.push(...chunkRows);
+        processed += chunk.length;
+        
+        progress.report({
+            message: `Comparing... (${processed}/${totalItems})`,
+            increment: (chunk.length / totalItems) * 100
         });
     }
 
@@ -307,7 +327,27 @@ export async function runComparison(
     const codiconsWebviewUri = panel.webview.asWebviewUri(codiconsUri);
     panel.webview.html = getWebviewContent(basePath, targetPath, codiconsWebviewUri.toString(), gridDefaults);
 
+    // Cache rows per subDir to avoid rescanning previously visited directories
+    const dirCache = new Map<string, WebviewRow[]>();
+
     async function runCompareAndSend(subDir: string): Promise<void> {
+        const isRoot = subDir === '';
+        const currentBase = subDir ? path.join(basePath, subDir) : basePath;
+        const currentTarget = subDir ? path.join(targetPath, subDir) : targetPath;
+
+        if (dirCache.has(subDir)) {
+            const cachedRows = dirCache.get(subDir)!;
+            panel.webview.postMessage({
+                command: 'setData',
+                rows: cachedRows,
+                isRoot,
+                currentSubDir: subDir,
+                basePath: currentBase,
+                targetPath: currentTarget,
+            });
+            return;
+        }
+
         await vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Notification,
@@ -316,9 +356,8 @@ export async function runComparison(
             },
             async (progress) => {
                 const rows = await compareCurrentLevel(basePath, targetPath, subDir, filter, config.encodingOverrides, progress);
-                const isRoot = subDir === '';
-                const currentBase = subDir ? path.join(basePath, subDir) : basePath;
-                const currentTarget = subDir ? path.join(targetPath, subDir) : targetPath;
+                dirCache.set(subDir, rows);
+
                 panel.webview.postMessage({
                     command: 'setData',
                     rows,
