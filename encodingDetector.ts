@@ -1,4 +1,6 @@
 import * as jschardet from 'jschardet';
+import * as fs from 'fs';
+import { TextDecoder } from 'util';
 
 const SAMPLE_SIZE = 8192;
 
@@ -27,33 +29,47 @@ const ENCODING_LABELS: Record<string, string> = {
     'macintosh': 'MacRoman',
 };
 
-export async function detectEncoding(buffer?: Buffer): Promise<string> {
-    if (!buffer || buffer.length === 0) {
-        return 'Empty';
-    }
-
+export async function detectEncoding(input: string | Buffer): Promise<string> {
     try {
-        const bytesRead = Math.min(buffer.length, SAMPLE_SIZE);
-        const sample = buffer.subarray(0, bytesRead);
+        let buffer: Buffer;
+        
+        if (Buffer.isBuffer(input)) {
+            buffer = input.subarray(0, SAMPLE_SIZE);
+        } else {
+            const fd = await fs.promises.open(input, 'r');
+            const allocBuffer = Buffer.alloc(SAMPLE_SIZE);
+            const { bytesRead } = await fd.read(allocBuffer, 0, SAMPLE_SIZE, 0);
+            await fd.close();
+            
+            if (bytesRead === 0) {
+                return 'Empty';
+            }
+            buffer = allocBuffer.subarray(0, bytesRead);
+        }
 
-        if (bytesRead >= 3 && sample[0] === 0xEF && sample[1] === 0xBB && sample[2] === 0xBF) {
+        if (buffer.length >= 3 && buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) {
             return 'UTF-8 (BOM)';
         }
-        if (bytesRead >= 2 && sample[0] === 0xFF && sample[1] === 0xFE) {
+        if (buffer.length >= 2 && buffer[0] === 0xFF && buffer[1] === 0xFE) {
             return 'UTF-16 LE (BOM)';
         }
-        if (bytesRead >= 2 && sample[0] === 0xFE && sample[1] === 0xFF) {
+        if (buffer.length >= 2 && buffer[0] === 0xFE && buffer[1] === 0xFF) {
             return 'UTF-16 BE (BOM)';
         }
 
-        const result = jschardet.detect(sample);
+        const result = jschardet.detect(buffer);
 
         if (!result || !result.encoding) {
-            return 'Binary';
+            return 'Windows-1252';
         }
 
         const lower = result.encoding.toLowerCase();
-        return ENCODING_LABELS[lower] || result.encoding;
+        
+        if (lower === 'utf-8' || lower === 'utf8' || lower === 'utf-16le' || lower === 'utf-16be') {
+            return ENCODING_LABELS[lower] || result.encoding;
+        }
+
+        return 'Windows-1252';
     } catch {
         return 'Unknown';
     }
@@ -75,10 +91,27 @@ export async function isOnlyEncodingDifference(bufA: Buffer, bufB: Buffer): Prom
             return buf;
         };
 
-        const cleanA = stripBom(bufA).toString('utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-        const cleanB = stripBom(bufB).toString('utf-8').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        const normalize = (buf: Buffer): string => {
+            const clean = stripBom(buf);
+            const detected = jschardet.detect(clean);
+            const lower = detected?.encoding?.toLowerCase() || '';
+            
+            let enc = 'windows-1252';
+            if (lower === 'utf-8' || lower === 'utf8' || lower === 'utf-16le' || lower === 'utf-16be') {
+                enc = lower;
+            }
 
-        return cleanA === cleanB;
+            let decoder: TextDecoder;
+            try {
+                decoder = new TextDecoder(enc);
+            } catch {
+                decoder = new TextDecoder('windows-1252');
+            }
+            
+            return decoder.decode(clean).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        };
+
+        return normalize(bufA) === normalize(bufB);
     } catch {
         return false;
     }
